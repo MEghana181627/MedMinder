@@ -37,7 +37,12 @@ android {
 }
 
 dependencies {
+    implementation("androidx.biometric:biometric:1.1.0")
+    implementation("androidx.navigation:navigation-compose:2.9.0")
+
     implementation(platform(libs.androidx.compose.bom))
+    implementation("androidx.compose.runtime:runtime")
+
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
