@@ -8,10 +8,7 @@ plugins {
 
 android {
     namespace = "uk.ac.tees.mad.s3640901"
-
-    compileSdk {
-        version = release(37)
-    }
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "uk.ac.tees.mad.s3640901"
@@ -46,10 +43,13 @@ dependencies {
     // Biometric authentication
     implementation("androidx.biometric:biometric:1.1.0")
 
-    // Navigation
-    implementation("androidx.navigation:navigation-compose:2.9.0")
+    // Fixes the invalid permission request-code crash
+    implementation("androidx.fragment:fragment-ktx:1.8.9")
 
-    // Compose Bill of Materials
+    // Navigation
+    implementation("androidx.navigation:navigation-compose:2.10.2")
+
+    // Compose BOM
     val composeBom = platform(
         "androidx.compose:compose-bom:2026.09.00"
     )

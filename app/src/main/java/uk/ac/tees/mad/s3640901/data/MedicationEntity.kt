@@ -13,5 +13,8 @@ data class MedicationEntity(
     val instructions: String,
     val scheduleType: String,
     val scheduleValue: String,
-    val isActive: Boolean = true
+    val isActive: Boolean = true,
+
+    // Private local path of the captured medicine photo
+    val photoPath: String? = null
 )

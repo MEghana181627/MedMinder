@@ -1,11 +1,18 @@
 package uk.ac.tees.mad.s3640901
 
+import android.Manifest
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.content.Context
+import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricPrompt
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,10 +23,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.width
+
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -44,11 +54,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.fragment.app.FragmentActivity
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -58,6 +72,7 @@ import kotlinx.coroutines.launch
 import uk.ac.tees.mad.s3640901.data.MedicationEntity
 import uk.ac.tees.mad.s3640901.data.MedMinderDatabase
 import uk.ac.tees.mad.s3640901.ui.theme.MedMinderTheme
+import java.io.File
 import java.util.Calendar
 import java.util.Locale
 
@@ -79,6 +94,23 @@ private object Routes {
     const val DASHBOARD = "dashboard"
     const val ADD_MEDICATION = "add_medication"
     const val HISTORY = "history"
+}
+
+private fun createMedicinePhotoFile(context: Context): File {
+    val directory = File(
+        context.filesDir,
+        "medicine_photos"
+    )
+
+    if (!directory.exists()) {
+        directory.mkdirs()
+    }
+
+    return File.createTempFile(
+        "medicine_",
+        ".jpg",
+        directory
+    )
 }
 
 @Composable
@@ -120,7 +152,7 @@ private fun MedMinderApp() {
                 onSaved = {
                     navController.popBackStack()
                 },
-                onCancel = {
+                onCancelClick = {
                     navController.popBackStack()
                 }
             )
@@ -339,37 +371,61 @@ private fun DashboardScreen(
 private fun MedicationCard(
     medication: MedicationEntity
 ) {
+    val bitmap = remember(medication.photoPath) {
+        medication.photoPath
+            ?.takeIf { it.isNotBlank() }
+            ?.let { BitmapFactory.decodeFile(it) }
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = medication.name,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-
-            Text(
-                text = "Dosage: ${medication.dosage}",
-                modifier = Modifier.padding(top = 6.dp)
-            )
-
-            Text(
-                text = "Schedule: ${medication.scheduleType}",
-                modifier = Modifier.padding(top = 4.dp)
-            )
-
-            Text(
-                text = medication.scheduleValue,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-
-            if (medication.instructions.isNotBlank()) {
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
                 Text(
-                    text = "Instructions: ${medication.instructions}",
+                    text = medication.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    text = "Dosage: ${medication.dosage}",
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+
+                Text(
+                    text = "Schedule: ${medication.scheduleType}",
                     modifier = Modifier.padding(top = 4.dp)
+                )
+
+                Text(
+                    text = medication.scheduleValue,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+
+                if (medication.instructions.isNotBlank()) {
+                    Text(
+                        text = "Instructions: ${medication.instructions}",
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Medicine photo",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .width(76.dp)
+                        .height(76.dp)
+                        .padding(start = 8.dp)
+                        .clip(RoundedCornerShape(8.dp))
                 )
             }
         }
@@ -381,7 +437,7 @@ private fun MedicationCard(
 private fun AddMedicationScreen(
     database: MedMinderDatabase,
     onSaved: () -> Unit,
-    onCancel: () -> Unit
+    onCancelClick: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -422,7 +478,19 @@ private fun AddMedicationScreen(
         mutableStateOf("")
     }
 
+    var photoPath by rememberSaveable {
+        mutableStateOf<String?>(null)
+    }
+
+    var pendingPhotoPath by rememberSaveable {
+        mutableStateOf<String?>(null)
+    }
+
     var errorMessage by rememberSaveable {
+        mutableStateOf("")
+    }
+
+    var cameraMessage by rememberSaveable {
         mutableStateOf("")
     }
 
@@ -435,6 +503,68 @@ private fun AddMedicationScreen(
         "Saturday",
         "Sunday"
     )
+
+    val takePictureLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.TakePicture()
+        ) { success ->
+
+            val capturedPath = pendingPhotoPath
+
+            if (success && capturedPath != null) {
+                val oldPhotoPath = photoPath
+
+                photoPath = capturedPath
+                cameraMessage = ""
+
+                if (
+                    oldPhotoPath != null &&
+                    oldPhotoPath != capturedPath
+                ) {
+                    File(oldPhotoPath).delete()
+                }
+            } else {
+                capturedPath?.let {
+                    File(it).delete()
+                }
+
+                cameraMessage = "Photo capture was cancelled."
+            }
+
+            pendingPhotoPath = null
+        }
+
+    val launchCamera: () -> Unit = {
+        try {
+            val imageFile = createMedicinePhotoFile(context)
+
+            pendingPhotoPath = imageFile.absolutePath
+
+            val imageUri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                imageFile
+            )
+
+            takePictureLauncher.launch(imageUri)
+        } catch (exception: Exception) {
+            cameraMessage =
+                "Unable to open the camera."
+        }
+    }
+
+    val cameraPermissionLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission()
+        ) { granted ->
+
+            if (granted) {
+                launchCamera()
+            } else {
+                cameraMessage =
+                    "Camera permission is required to capture a medicine photo."
+            }
+        }
 
     Scaffold(
         topBar = {
@@ -492,6 +622,58 @@ private fun AddMedicationScreen(
                     .fillMaxWidth()
                     .height(110.dp)
             )
+
+            Button(
+                onClick = {
+                    if (
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.CAMERA
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        launchCamera()
+                    } else {
+                        cameraPermissionLauncher.launch(
+                            Manifest.permission.CAMERA
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Take Medicine Photo")
+            }
+
+            if (photoPath != null) {
+                Text(
+                    text = "Photo preview",
+                    fontWeight = FontWeight.Bold
+                )
+
+                val bitmap = remember(photoPath) {
+                    photoPath
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { BitmapFactory.decodeFile(it) }
+                }
+
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Captured medicine photo",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                    )
+                }
+            }
+
+            if (cameraMessage.isNotBlank()) {
+                Text(
+                    text = cameraMessage,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
 
             Text(
                 text = "Schedule",
@@ -639,6 +821,7 @@ private fun AddMedicationScreen(
                                 hour,
                                 minute
                             )
+
                             errorMessage = ""
                         },
                         calendar.get(Calendar.HOUR_OF_DAY),
@@ -669,7 +852,17 @@ private fun AddMedicationScreen(
                 horizontalArrangement = Arrangement.End
             ) {
                 OutlinedButton(
-                    onClick = onCancel
+                    onClick = {
+                        photoPath?.let {
+                            File(it).delete()
+                        }
+
+                        pendingPhotoPath?.let {
+                            File(it).delete()
+                        }
+
+                        onCancelClick()
+                    }
                 ) {
                     Text("Cancel")
                 }
@@ -696,7 +889,7 @@ private fun AddMedicationScreen(
                             }
 
                             scheduleType == "Monthly" &&
-                                    (monthlyDay.toIntOrNull() !in 1..31) -> {
+                                    monthlyDay.toIntOrNull() !in 1..31 -> {
                                 errorMessage =
                                     "Enter a day between 1 and 31."
                             }
@@ -732,19 +925,25 @@ private fun AddMedicationScreen(
                                     }
 
                                 scope.launch {
-                                    database.medicationDao()
-                                        .insertMedication(
-                                            MedicationEntity(
-                                                name = medicationName.trim(),
-                                                dosage = dosage.trim(),
-                                                instructions = instructions.trim(),
-                                                scheduleType = scheduleType,
-                                                scheduleValue = scheduleValue,
-                                                isActive = true
+                                    try {
+                                        database.medicationDao()
+                                            .insertMedication(
+                                                MedicationEntity(
+                                                    name = medicationName.trim(),
+                                                    dosage = dosage.trim(),
+                                                    instructions = instructions.trim(),
+                                                    scheduleType = scheduleType,
+                                                    scheduleValue = scheduleValue,
+                                                    isActive = true,
+                                                    photoPath = photoPath
+                                                )
                                             )
-                                        )
 
-                                    onSaved()
+                                        onSaved()
+                                    } catch (exception: Exception) {
+                                        errorMessage =
+                                            "Medication could not be saved."
+                                    }
                                 }
                             }
                         }

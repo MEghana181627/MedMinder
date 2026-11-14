@@ -9,12 +9,16 @@ import kotlinx.coroutines.flow.Flow
 interface MedicationDao {
 
     @Query(
-        "SELECT * FROM medications " +
-                "WHERE isActive = 1 " +
-                "ORDER BY name COLLATE NOCASE"
+        """
+        SELECT * FROM medications
+        WHERE isActive = 1
+        ORDER BY name COLLATE NOCASE
+        """
     )
     fun observeActiveMedications(): Flow<List<MedicationEntity>>
 
     @Insert
-    suspend fun insertMedication(medication: MedicationEntity)
+    suspend fun insertMedication(
+        medication: MedicationEntity
+    )
 }
