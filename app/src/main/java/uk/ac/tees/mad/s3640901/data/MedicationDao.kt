@@ -20,5 +20,5 @@ interface MedicationDao {
     @Insert
     suspend fun insertMedication(
         medication: MedicationEntity
-    )
+    ): Long
 }

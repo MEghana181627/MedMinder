@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Biometric authentication -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
+    <!-- Camera photo capture -->
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Android 13+ notification permission -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature
@@ -32,6 +37,12 @@
 
         </activity>
 
+        <!-- Receives medication reminder alarms -->
+        <receiver
+            android:name=".notifications.MedicationReminderReceiver"
+            android:exported="false" />
+
+        <!-- Required for saving captured medicine photos -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

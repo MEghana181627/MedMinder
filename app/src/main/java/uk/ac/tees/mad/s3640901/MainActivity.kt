@@ -23,9 +23,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.width
-
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -71,6 +69,8 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.launch
 import uk.ac.tees.mad.s3640901.data.MedicationEntity
 import uk.ac.tees.mad.s3640901.data.MedMinderDatabase
+import uk.ac.tees.mad.s3640901.notifications.MedicationNotification
+import uk.ac.tees.mad.s3640901.notifications.MedicationReminderScheduler
 import uk.ac.tees.mad.s3640901.ui.theme.MedMinderTheme
 import java.io.File
 import java.util.Calendar
@@ -78,12 +78,38 @@ import java.util.Locale
 
 class MainActivity : FragmentActivity() {
 
+    companion object {
+        private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 2201
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        MedicationNotification.createChannel(this)
 
         setContent {
             MedMinderTheme {
                 MedMinderApp()
+            }
+        }
+
+        window.decorView.post {
+            requestNotificationPermissionIfNeeded()
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val permissionState = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            )
+
+            if (permissionState != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    NOTIFICATION_PERMISSION_REQUEST_CODE
+                )
             }
         }
     }
@@ -547,9 +573,9 @@ private fun AddMedicationScreen(
             )
 
             takePictureLauncher.launch(imageUri)
-        } catch (exception: Exception) {
-            cameraMessage =
-                "Unable to open the camera."
+        } catch (_: Exception) {
+            pendingPhotoPath = null
+            cameraMessage = "Unable to open the camera."
         }
     }
 
@@ -733,9 +759,7 @@ private fun AddMedicationScreen(
                             onClick = {
                                 val currentDays = selectedWeekdays
                                     .split(",")
-                                    .filter {
-                                        it.isNotBlank()
-                                    }
+                                    .filter { it.isNotBlank() }
                                     .toMutableList()
 
                                 if (currentDays.contains(day)) {
@@ -920,27 +944,39 @@ private fun AddMedicationScreen(
                                         "One-time" ->
                                             "$oneTimeDate at $doseTime"
 
-                                        else ->
-                                            doseTime
+                                        else -> doseTime
                                     }
 
                                 scope.launch {
                                     try {
-                                        database.medicationDao()
-                                            .insertMedication(
-                                                MedicationEntity(
-                                                    name = medicationName.trim(),
-                                                    dosage = dosage.trim(),
-                                                    instructions = instructions.trim(),
-                                                    scheduleType = scheduleType,
-                                                    scheduleValue = scheduleValue,
-                                                    isActive = true,
-                                                    photoPath = photoPath
+                                        val medication =
+                                            MedicationEntity(
+                                                name = medicationName.trim(),
+                                                dosage = dosage.trim(),
+                                                instructions = instructions.trim(),
+                                                scheduleType = scheduleType,
+                                                scheduleValue = scheduleValue,
+                                                isActive = true,
+                                                photoPath = photoPath
+                                            )
+
+                                        val generatedId =
+                                            database
+                                                .medicationDao()
+                                                .insertMedication(
+                                                    medication
+                                                )
+
+                                        MedicationReminderScheduler
+                                            .scheduleNext(
+                                                context = context,
+                                                medication = medication.copy(
+                                                    id = generatedId
                                                 )
                                             )
 
                                         onSaved()
-                                    } catch (exception: Exception) {
+                                    } catch (_: Exception) {
                                         errorMessage =
                                             "Medication could not be saved."
                                     }
