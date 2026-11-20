@@ -18,6 +18,15 @@ interface MedicationDao {
     )
     fun observeActiveMedications(): Flow<List<MedicationEntity>>
 
+    @Query(
+        """
+        SELECT * FROM medications
+        WHERE isActive = 1
+        ORDER BY name COLLATE NOCASE
+        """
+    )
+    suspend fun getActiveMedications(): List<MedicationEntity>
+
     @Insert
     suspend fun insertMedication(
         medication: MedicationEntity
@@ -47,5 +56,19 @@ interface MedicationDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveDoseOutcome(
         outcome: MedicationDoseOutcomeEntity
+    )
+
+    @Query(
+        """
+        UPDATE medication_dose_outcomes
+        SET dismissedAt = :dismissedAt
+        WHERE medicationId = :medicationId
+        AND scheduledAt = :scheduledAt
+        """
+    )
+    suspend fun dismissDoseOutcome(
+        medicationId: Long,
+        scheduledAt: Long,
+        dismissedAt: Long
     )
 }

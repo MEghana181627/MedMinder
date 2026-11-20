@@ -16,7 +16,9 @@ import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -44,6 +47,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -71,10 +75,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uk.ac.tees.mad.s3640901.data.DoseStatus
-import uk.ac.tees.mad.s3640901.data.MedMinderDatabase
 import uk.ac.tees.mad.s3640901.data.MedicationDao
 import uk.ac.tees.mad.s3640901.data.MedicationDoseOutcomeEntity
 import uk.ac.tees.mad.s3640901.data.MedicationEntity
+import uk.ac.tees.mad.s3640901.data.MedMinderDatabase
+import uk.ac.tees.mad.s3640901.notifications.MedicationNotification
+import uk.ac.tees.mad.s3640901.notifications.MedicationOverdueProcessor
+import uk.ac.tees.mad.s3640901.notifications.MedicationReminderScheduler
 import uk.ac.tees.mad.s3640901.notifications.MedicationScheduleCalculator
 import uk.ac.tees.mad.s3640901.ui.theme.MedMinderTheme
 import java.io.File
@@ -121,6 +128,10 @@ private fun MedMinderApp() {
         MedMinderDatabase
             .getInstance(context)
             .medicationDao()
+    }
+
+    LaunchedEffect(Unit) {
+        MedicationNotification.createChannel(context)
     }
 
     NavHost(
@@ -181,6 +192,13 @@ private fun SecureAccessScreen(
         mutableStateOf("")
     }
 
+    val notificationPermissionLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission()
+        ) {
+            onAuthenticated()
+        }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -207,15 +225,32 @@ private fun SecureAccessScreen(
 
         Button(
             onClick = {
-                if (activity != null) {
-                    showBiometricPrompt(
-                        activity = activity,
-                        onSuccess = onAuthenticated,
-                        onMessage = { message = it }
-                    )
-                } else {
+                if (activity == null) {
                     message = "Authentication is not available."
+                    return@Button
                 }
+
+                showBiometricPrompt(
+                    activity = activity,
+                    onSuccess = {
+                        if (
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                            ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.POST_NOTIFICATIONS
+                            ) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            notificationPermissionLauncher.launch(
+                                Manifest.permission.POST_NOTIFICATIONS
+                            )
+                        } else {
+                            onAuthenticated()
+                        }
+                    },
+                    onMessage = {
+                        message = it
+                    }
+                )
             },
             modifier = Modifier.padding(top = 24.dp)
         ) {
@@ -275,12 +310,16 @@ private fun showBiometricPrompt(
             }
 
             override fun onAuthenticationFailed() {
-                onMessage("Authentication was not recognised. Try again.")
+                onMessage(
+                    "Authentication was not recognised. Try again."
+                )
             }
         }
     )
 
-    biometricPrompt.authenticate(promptBuilder.build())
+    biometricPrompt.authenticate(
+        promptBuilder.build()
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -289,6 +328,9 @@ private fun DashboardScreen(
     navController: NavHostController,
     medicationDao: MedicationDao
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
     val medications by medicationDao
         .observeActiveMedications()
         .collectAsState(initial = emptyList())
@@ -297,14 +339,29 @@ private fun DashboardScreen(
         .observeDoseOutcomes()
         .collectAsState(initial = emptyList())
 
-    val scope = rememberCoroutineScope()
-    val medicationById = medications.associateBy { it.id }
+    LaunchedEffect(medications) {
+        withContext(Dispatchers.IO) {
+            MedicationOverdueProcessor.process(
+                context = context,
+                medicationDao = medicationDao,
+                medications = medications
+            )
+        }
+    }
+
+    val medicationById = medications.associateBy {
+        it.id
+    }
 
     val missedOutcomes = outcomes
-        .filter { it.status == DoseStatus.MISSED }
+        .filter {
+            it.status == DoseStatus.MISSED &&
+                    it.dismissedAt == null
+        }
         .mapNotNull { outcome ->
-            medicationById[outcome.medicationId]
-                ?.let { medication -> medication to outcome }
+            medicationById[outcome.medicationId]?.let { medication ->
+                medication to outcome
+            }
         }
         .sortedByDescending {
             it.second.scheduledAt
@@ -315,7 +372,6 @@ private fun DashboardScreen(
             MedicationScheduleCalculator
                 .nextDoseTime(medication)
                 ?.let { doseTime ->
-
                     val outcome = outcomes.firstOrNull {
                         it.medicationId == medication.id &&
                                 it.scheduledAt == doseTime
@@ -328,8 +384,8 @@ private fun DashboardScreen(
                     )
                 }
         }
-        .filter { dose ->
-            dose.third == null
+        .filter {
+            it.third == null
         }
         .sortedBy {
             it.second
@@ -350,6 +406,27 @@ private fun DashboardScreen(
                         recordedAt = System.currentTimeMillis()
                     )
                 )
+
+                MedicationReminderScheduler
+                    .scheduleNextForMedication(
+                        context = context,
+                        medication = medication,
+                        afterMillis = scheduledAt + 1L
+                    )
+            }
+        }
+    }
+
+    fun dismissMissed(
+        outcome: MedicationDoseOutcomeEntity
+    ) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                medicationDao.dismissDoseOutcome(
+                    medicationId = outcome.medicationId,
+                    scheduledAt = outcome.scheduledAt,
+                    dismissedAt = System.currentTimeMillis()
+                )
             }
         }
     }
@@ -365,43 +442,15 @@ private fun DashboardScreen(
     ) { paddingValues ->
 
         if (medications.isEmpty()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    text = "No active medication",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    text = "Add a medication to begin managing your schedule.",
-                    modifier = Modifier.padding(top = 12.dp)
-                )
-
-                Button(
-                    onClick = {
-                        navController.navigate(Routes.ADD_EDIT)
-                    },
-                    modifier = Modifier.padding(top = 24.dp)
-                ) {
-                    Text("Add Medication")
+            EmptyDashboard(
+                paddingValues = paddingValues,
+                onAddMedication = {
+                    navController.navigate(Routes.ADD_EDIT)
+                },
+                onHistory = {
+                    navController.navigate(Routes.HISTORY)
                 }
-
-                OutlinedButton(
-                    onClick = {
-                        navController.navigate(Routes.HISTORY)
-                    },
-                    modifier = Modifier.padding(top = 12.dp)
-                ) {
-                    Text("My History")
-                }
-            }
+            )
         } else {
             LazyColumn(
                 modifier = Modifier
@@ -409,7 +458,7 @@ private fun DashboardScreen(
                     .padding(paddingValues)
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                contentPadding = PaddingValues(
                     vertical = 16.dp
                 )
             ) {
@@ -423,10 +472,18 @@ private fun DashboardScreen(
                         )
                     }
 
-                    items(missedOutcomes) { pair ->
+                    items(
+                        items = missedOutcomes,
+                        key = {
+                            "${it.second.medicationId}_${it.second.scheduledAt}"
+                        }
+                    ) { item ->
                         MissedMedicationCard(
-                            medication = pair.first,
-                            outcome = pair.second
+                            medication = item.first,
+                            outcome = item.second,
+                            onDismiss = {
+                                dismissMissed(item.second)
+                            }
                         )
                     }
                 }
@@ -441,18 +498,23 @@ private fun DashboardScreen(
 
                 if (upcomingDoses.isEmpty()) {
                     item {
-                        Text("No pending upcoming medication.")
+                        Text("No upcoming medications.")
                     }
                 } else {
-                    items(upcomingDoses) { dose ->
+                    items(
+                        items = upcomingDoses,
+                        key = {
+                            "${it.first.id}_${it.second}"
+                        }
+                    ) { item ->
                         MedicationDoseCard(
-                            medication = dose.first,
-                            scheduledAt = dose.second,
-                            currentStatus = dose.third?.status,
+                            medication = item.first,
+                            scheduledAt = item.second,
+                            currentStatus = item.third?.status,
                             onStatusSelected = { status ->
                                 saveStatus(
-                                    medication = dose.first,
-                                    scheduledAt = dose.second,
+                                    medication = item.first,
+                                    scheduledAt = item.second,
                                     status = status
                                 )
                             }
@@ -487,6 +549,47 @@ private fun DashboardScreen(
 }
 
 @Composable
+private fun EmptyDashboard(
+    paddingValues: PaddingValues,
+    onAddMedication: () -> Unit,
+    onHistory: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(paddingValues)
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "No active medication",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold
+        )
+
+        Text(
+            text = "Add a medication to begin managing your schedule.",
+            modifier = Modifier.padding(top = 12.dp)
+        )
+
+        Button(
+            onClick = onAddMedication,
+            modifier = Modifier.padding(top = 24.dp)
+        ) {
+            Text("Add Medication")
+        }
+
+        OutlinedButton(
+            onClick = onHistory,
+            modifier = Modifier.padding(top = 12.dp)
+        ) {
+            Text("My History")
+        }
+    }
+}
+
+@Composable
 private fun MedicationDoseCard(
     medication: MedicationEntity,
     scheduledAt: Long,
@@ -494,84 +597,95 @@ private fun MedicationDoseCard(
     onStatusSelected: (String) -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        )
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.Top
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             MedicationThumbnail(
                 photoPath = medication.photoPath,
                 modifier = Modifier
-                    .width(72.dp)
-                    .height(72.dp)
+                    .width(84.dp)
+                    .height(84.dp)
             )
 
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
+            Text(
+                text = medication.name,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+
+            Text("Dosage: ${medication.dosage}")
+
+            if (medication.instructions.isNotBlank()) {
                 Text(
-                    text = medication.name,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
+                    "Instructions: ${medication.instructions}"
                 )
+            }
 
-                Text("Dosage: ${medication.dosage}")
+            Text(
+                "Schedule: ${medication.scheduleType}"
+            )
 
-                if (medication.instructions.isNotBlank()) {
-                    Text("Instructions: ${medication.instructions}")
+            Text(
+                medication.scheduleValue,
+                style = MaterialTheme.typography.bodyMedium
+            )
+
+            Text(
+                text = "Next dose: ${formatDoseTime(scheduledAt)}"
+            )
+
+            Text(
+                text = "Status: ${formatStatus(currentStatus)}",
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(
+                        rememberScrollState()
+                    ),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        onStatusSelected(DoseStatus.TAKEN)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    Text("Taken")
                 }
 
-                Text("Schedule: ${medication.scheduleType}")
-
-                Text(
-                    text = medication.scheduleValue,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-
-                Text(
-                    text = "Next dose: ${formatDoseTime(scheduledAt)}",
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-
-                Text(
-                    text = "Status: ${formatStatus(currentStatus)}",
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                Button(
+                    onClick = {
+                        onStatusSelected(DoseStatus.SKIPPED)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.tertiary
+                    )
                 ) {
-                    OutlinedButton(
-                        onClick = {
-                            onStatusSelected(DoseStatus.TAKEN)
-                        }
-                    ) {
-                        Text("Taken")
-                    }
+                    Text("Skipped")
+                }
 
-                    OutlinedButton(
-                        onClick = {
-                            onStatusSelected(DoseStatus.SKIPPED)
-                        }
-                    ) {
-                        Text("Skipped")
-                    }
-
-                    OutlinedButton(
-                        onClick = {
-                            onStatusSelected(DoseStatus.MISSED)
-                        }
-                    ) {
-                        Text("Missed")
-                    }
+                Button(
+                    onClick = {
+                        onStatusSelected(DoseStatus.MISSED)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Missed")
                 }
             }
         }
@@ -581,7 +695,8 @@ private fun MedicationDoseCard(
 @Composable
 private fun MissedMedicationCard(
     medication: MedicationEntity,
-    outcome: MedicationDoseOutcomeEntity
+    outcome: MedicationDoseOutcomeEntity,
+    onDismiss: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -589,40 +704,41 @@ private fun MissedMedicationCard(
             containerColor = MaterialTheme.colorScheme.errorContainer
         )
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.Top
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             MedicationThumbnail(
                 photoPath = medication.photoPath,
                 modifier = Modifier
-                    .width(72.dp)
-                    .height(72.dp)
+                    .width(84.dp)
+                    .height(84.dp)
             )
 
-            Column(
-                modifier = Modifier.weight(1f)
+            Text(
+                text = medication.name,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+
+            Text(
+                text = "Scheduled: ${formatDoseTime(outcome.scheduledAt)}",
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+
+            Text(
+                text = "Status: Missed",
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            OutlinedButton(
+                onClick = onDismiss
             ) {
-                Text(
-                    text = medication.name,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    text = "Scheduled: ${formatDoseTime(outcome.scheduledAt)}",
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
-
-                Text(
-                    text = "Status: Missed",
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Text("Dismiss")
             }
         }
     }
@@ -635,9 +751,11 @@ private fun MedicationThumbnail(
 ) {
     val bitmap = remember(photoPath) {
         photoPath
-            ?.takeIf { it.isNotBlank() }
-            ?.let { path ->
-                BitmapFactory.decodeFile(path)
+            ?.takeIf {
+                it.isNotBlank()
+            }
+            ?.let {
+                BitmapFactory.decodeFile(it)
             }
             ?.asImageBitmap()
     }
@@ -659,7 +777,7 @@ private fun MedicationThumbnail(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
             )
         ) {
-            androidx.compose.foundation.layout.Box(
+            Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
@@ -672,7 +790,9 @@ private fun MedicationThumbnail(
     }
 }
 
-private fun formatStatus(status: String?): String {
+private fun formatStatus(
+    status: String?
+): String {
     return status
         ?.lowercase(Locale.getDefault())
         ?.replaceFirstChar {
@@ -681,7 +801,9 @@ private fun formatStatus(status: String?): String {
         ?: "Pending"
 }
 
-private fun formatDoseTime(timeMillis: Long): String {
+private fun formatDoseTime(
+    timeMillis: Long
+): String {
     return SimpleDateFormat(
         "EEE, dd MMM yyyy HH:mm",
         Locale.getDefault()
@@ -777,44 +899,43 @@ private fun AddMedicationScreen(
         mutableStateOf<String?>(null)
     }
 
-    val takePictureLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicture()
-    ) { captured ->
+    val takePictureLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.TakePicture()
+        ) { captured ->
+            if (captured) {
+                photoPath = pendingPhotoPath
+            } else {
+                pendingPhotoPath?.let {
+                    File(it).delete()
+                }
+            }
 
-        if (captured) {
-            photoPath = pendingPhotoPath
-        } else {
-            pendingPhotoPath?.let { path ->
-                File(path).delete()
+            pendingPhotoPath = null
+        }
+
+    val cameraPermissionLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted) {
+                val photo = createMedicationPhoto(context)
+
+                pendingPhotoPath = photo.first.absolutePath
+                takePictureLauncher.launch(photo.second)
+            } else {
+                errorMessage =
+                    "Camera permission is required to capture a medicine photo."
             }
         }
 
-        pendingPhotoPath = null
-    }
-
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-
-        if (granted) {
-            val photo = createMedicationPhoto(context)
-
-            pendingPhotoPath = photo.first.absolutePath
-            takePictureLauncher.launch(photo.second)
-        } else {
-            errorMessage =
-                "Camera permission is required to capture a medicine photo."
-        }
-    }
-
     fun openCamera() {
-        val permissionGranted =
+        if (
             ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.CAMERA
             ) == PackageManager.PERMISSION_GRANTED
-
-        if (permissionGranted) {
+        ) {
             val photo = createMedicationPhoto(context)
 
             pendingPhotoPath = photo.first.absolutePath
@@ -928,7 +1049,9 @@ private fun AddMedicationScreen(
             )
 
             OutlinedButton(
-                onClick = ::openCamera,
+                onClick = {
+                    openCamera()
+                },
                 enabled = !isSaving,
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -951,12 +1074,15 @@ private fun AddMedicationScreen(
                 if (previewBitmap != null) {
                     Image(
                         bitmap = previewBitmap,
-                        contentDescription = "Captured medicine photo preview",
+                        contentDescription =
+                            "Captured medicine photo preview",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(180.dp)
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(
+                                RoundedCornerShape(12.dp)
+                            )
                     )
 
                     OutlinedButton(
@@ -978,7 +1104,7 @@ private fun AddMedicationScreen(
                 fontWeight = FontWeight.Bold
             )
 
-            androidx.compose.foundation.layout.Box {
+            Box {
                 OutlinedButton(
                     onClick = {
                         scheduleMenuExpanded = true
@@ -1070,7 +1196,9 @@ private fun AddMedicationScreen(
 
             if (scheduleType == ScheduleType.ONE_TIME) {
                 OutlinedButton(
-                    onClick = ::showDatePicker,
+                    onClick = {
+                        showDatePicker()
+                    },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
@@ -1084,7 +1212,9 @@ private fun AddMedicationScreen(
             }
 
             OutlinedButton(
-                onClick = ::showTimePicker,
+                onClick = {
+                    showTimePicker()
+                },
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
@@ -1122,44 +1252,66 @@ private fun AddMedicationScreen(
                 Button(
                     enabled = !isSaving,
                     onClick = {
-                        val validationError = validateMedication(
-                            name = name,
-                            dosage = dosage,
-                            scheduleType = scheduleType,
-                            selectedDays = selectedDays,
-                            monthlyDay = monthlyDay,
-                            selectedDate = selectedDate,
-                            selectedTime = selectedTime
-                        )
+                        val validationError =
+                            validateMedication(
+                                name = name,
+                                dosage = dosage,
+                                scheduleType = scheduleType,
+                                selectedDays = selectedDays,
+                                monthlyDay = monthlyDay,
+                                selectedDate = selectedDate,
+                                selectedTime = selectedTime
+                            )
 
                         if (validationError != null) {
                             errorMessage = validationError
                             return@Button
                         }
 
-                        val scheduleValue = buildScheduleValue(
-                            scheduleType = scheduleType,
-                            selectedDays = selectedDays,
-                            monthlyDay = monthlyDay,
-                            selectedDate = selectedDate,
-                            selectedTime = selectedTime
-                        )
+                        val scheduleValue =
+                            buildScheduleValue(
+                                scheduleType = scheduleType,
+                                selectedDays = selectedDays,
+                                monthlyDay = monthlyDay,
+                                selectedDate = selectedDate,
+                                selectedTime = selectedTime
+                            )
 
                         isSaving = true
 
                         scope.launch {
-                            withContext(Dispatchers.IO) {
-                                medicationDao.insertMedication(
-                                    MedicationEntity(
-                                        name = name.trim(),
-                                        dosage = dosage.trim(),
-                                        instructions = instructions.trim(),
-                                        scheduleType = scheduleType.label,
-                                        scheduleValue = scheduleValue,
-                                        photoPath = photoPath
+                            val savedMedication =
+                                withContext(Dispatchers.IO) {
+                                    val medication =
+                                        MedicationEntity(
+                                            name = name.trim(),
+                                            dosage = dosage.trim(),
+                                            instructions =
+                                                instructions.trim(),
+                                            scheduleType =
+                                                scheduleType.label,
+                                            scheduleValue =
+                                                scheduleValue,
+                                            photoPath = photoPath,
+                                            createdAt =
+                                                System.currentTimeMillis()
+                                        )
+
+                                    val medicationId =
+                                        medicationDao.insertMedication(
+                                            medication
+                                        )
+
+                                    medication.copy(
+                                        id = medicationId
                                     )
+                                }
+
+                            MedicationReminderScheduler
+                                .scheduleForMedication(
+                                    context = context,
+                                    medication = savedMedication
                                 )
-                            }
 
                             isSaving = false
                             onSaved()
@@ -1237,17 +1389,21 @@ private fun buildScheduleValue(
     selectedTime: String
 ): String {
     return when (scheduleType) {
-        ScheduleType.DAILY ->
+        ScheduleType.DAILY -> {
             "Every day at $selectedTime"
+        }
 
-        ScheduleType.WEEKLY ->
+        ScheduleType.WEEKLY -> {
             "${selectedDays.sorted().joinToString(", ")} at $selectedTime"
+        }
 
-        ScheduleType.MONTHLY ->
+        ScheduleType.MONTHLY -> {
             "Day $monthlyDay of each month at $selectedTime"
+        }
 
-        ScheduleType.ONE_TIME ->
+        ScheduleType.ONE_TIME -> {
             "$selectedDate at $selectedTime"
+        }
     }
 }
 
@@ -1267,7 +1423,6 @@ private fun PlaceholderScreen(
             )
         }
     ) { paddingValues ->
-
         Column(
             modifier = Modifier
                 .fillMaxSize()

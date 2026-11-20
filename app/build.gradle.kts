@@ -2,7 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 
-    // Required for Room with AGP 9 built-in Kotlin
+    // Required for Room with AGP 9+
     id("com.android.legacy-kapt")
 }
 
@@ -12,6 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "uk.ac.tees.mad.s3640901"
+
         minSdk = 24
         targetSdk = 37
 
@@ -43,15 +44,17 @@ dependencies {
     // Biometric authentication
     implementation("androidx.biometric:biometric:1.1.0")
 
-    // Compatible Fragment version for permission launchers
+    // Camera and Activity Result compatibility
+    implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.activity:activity-ktx:1.13.0")
     implementation("androidx.fragment:fragment-ktx:1.9.1")
 
     // Navigation
-    implementation("androidx.navigation:navigation-compose:2.10.2")
+    implementation("androidx.navigation:navigation-compose:2.9.0")
 
     // Compose BOM
     val composeBom = platform(
-        "androidx.compose:compose-bom:2026.09.00"
+        "androidx.compose:compose-bom:2026.02.01"
     )
 
     implementation(composeBom)
@@ -61,7 +64,7 @@ dependencies {
     implementation("androidx.compose.runtime:runtime")
     implementation("androidx.compose.runtime:runtime-saveable")
 
-    // Compose foundation
+    // Compose Foundation
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.foundation:foundation-layout")
 
@@ -74,26 +77,35 @@ dependencies {
     // Material 3
     implementation("androidx.compose.material3:material3")
 
-    // Android and lifecycle support
-    implementation("androidx.activity:activity-compose:1.13.0")
-    implementation("androidx.activity:activity-ktx:1.13.0")
+    // Android support
     implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
 
     // Room database
-    implementation("androidx.room:room-runtime:2.7.2")
-    implementation("androidx.room:room-ktx:2.7.2")
-    add("kapt", "androidx.room:room-compiler:2.7.2")
+    implementation("androidx.room:room-runtime:2.8.4")
+    implementation("androidx.room:room-ktx:2.8.4")
+    add(
+        "kapt",
+        "androidx.room:room-compiler:2.8.4"
+    )
 
-    // Unit tests
+    // Unit testing
     testImplementation("junit:junit:4.13.2")
 
-    // Android tests
+    // Android testing
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation(
+        "androidx.test.espresso:espresso-core:3.7.0"
+    )
+    androidTestImplementation(
+        "androidx.compose.ui:ui-test-junit4"
+    )
 
     // Debug tools
-    debugImplementation("androidx.compose.ui:ui-tooling")
-    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    debugImplementation(
+        "androidx.compose.ui:ui-tooling"
+    )
+    debugImplementation(
+        "androidx.compose.ui:ui-test-manifest"
+    )
 }

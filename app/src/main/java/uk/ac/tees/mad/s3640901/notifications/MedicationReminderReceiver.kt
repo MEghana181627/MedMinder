@@ -3,7 +3,13 @@ package uk.ac.tees.mad.s3640901.notifications
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import uk.ac.tees.mad.s3640901.data.MedicationEntity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import uk.ac.tees.mad.s3640901.data.DoseStatus
+import uk.ac.tees.mad.s3640901.data.MedMinderDatabase
+import uk.ac.tees.mad.s3640901.data.MedicationDoseOutcomeEntity
 
 class MedicationReminderReceiver : BroadcastReceiver() {
 
@@ -11,67 +17,114 @@ class MedicationReminderReceiver : BroadcastReceiver() {
         context: Context,
         intent: Intent
     ) {
-        val medicationId = intent.getLongExtra(
-            EXTRA_MEDICATION_ID,
-            0L
-        )
+        val pendingResult = goAsync()
+        val appContext = context.applicationContext
 
-        val medicineName = intent.getStringExtra(
-            EXTRA_MEDICINE_NAME
-        ).orEmpty()
+        CoroutineScope(
+            SupervisorJob() + Dispatchers.IO
+        ).launch {
+            try {
+                val medicationId = intent.getLongExtra(
+                    MedicationReminderScheduler.EXTRA_MEDICATION_ID,
+                    0L
+                )
 
-        val dosage = intent.getStringExtra(
-            EXTRA_DOSAGE
-        ).orEmpty()
+                val scheduledAt = intent.getLongExtra(
+                    MedicationReminderScheduler.EXTRA_SCHEDULED_AT,
+                    0L
+                )
 
-        val scheduleType = intent.getStringExtra(
-            EXTRA_SCHEDULE_TYPE
-        ).orEmpty()
+                if (
+                    medicationId == 0L ||
+                    scheduledAt == 0L
+                ) {
+                    return@launch
+                }
 
-        val scheduleValue = intent.getStringExtra(
-            EXTRA_SCHEDULE_VALUE
-        ).orEmpty()
+                val dao = MedMinderDatabase
+                    .getInstance(appContext)
+                    .medicationDao()
 
-        val doseTime = intent.getLongExtra(
-            EXTRA_DOSE_TIME,
-            System.currentTimeMillis()
-        )
+                val medication = dao
+                    .getActiveMedications()
+                    .firstOrNull { it.id == medicationId }
+                    ?: return@launch
 
-        if (medicationId <= 0L || medicineName.isBlank()) {
-            return
+                // Ignore stale alarms for doses before medication creation.
+                if (scheduledAt < medication.createdAt) {
+                    MedicationReminderScheduler.scheduleForMedication(
+                        context = appContext,
+                        medication = medication,
+                        afterMillis = System.currentTimeMillis()
+                    )
+                    return@launch
+                }
+
+                val existingOutcome =
+                    dao.findDoseOutcome(
+                        medicationId = medicationId,
+                        scheduledAt = scheduledAt
+                    )
+
+                when (intent.action) {
+
+                    MedicationReminderScheduler.ACTION_DOSE_REMINDER -> {
+                        if (existingOutcome == null) {
+                            MedicationNotification.showDoseReminder(
+                                context = appContext,
+                                medicationName = medication.name,
+                                scheduledAt = scheduledAt,
+                                notificationId = notificationId(
+                                    medicationId = medicationId,
+                                    scheduledAt = scheduledAt,
+                                    type = "reminder"
+                                )
+                            )
+                        }
+                    }
+
+                    MedicationReminderScheduler.ACTION_MISSED_CHECK -> {
+                        if (existingOutcome == null) {
+                            dao.saveDoseOutcome(
+                                MedicationDoseOutcomeEntity(
+                                    medicationId = medicationId,
+                                    scheduledAt = scheduledAt,
+                                    status = DoseStatus.MISSED,
+                                    recordedAt = System.currentTimeMillis()
+                                )
+                            )
+
+                            MedicationNotification.showMissedDose(
+                                context = appContext,
+                                medicationName = medication.name,
+                                scheduledAt = scheduledAt,
+                                notificationId = notificationId(
+                                    medicationId = medicationId,
+                                    scheduledAt = scheduledAt,
+                                    type = "missed"
+                                )
+                            )
+                        }
+
+                        MedicationReminderScheduler
+                            .scheduleNextForMedication(
+                                context = appContext,
+                                medication = medication,
+                                afterMillis = scheduledAt + 1L
+                            )
+                    }
+                }
+            } finally {
+                pendingResult.finish()
+            }
         }
-
-        MedicationNotification.showReminder(
-            context = context,
-            medicationId = medicationId,
-            medicineName = medicineName,
-            dosage = dosage
-        )
-
-        val medication = MedicationEntity(
-            id = medicationId,
-            name = medicineName,
-            dosage = dosage,
-            instructions = "",
-            scheduleType = scheduleType,
-            scheduleValue = scheduleValue,
-            isActive = true,
-            photoPath = null
-        )
-
-        MedicationReminderScheduler.scheduleNext(
-            context = context,
-            medication = medication,
-            afterMillis = doseTime
-        )
     }
 
-    companion object {
-        const val EXTRA_MEDICATION_ID = "medication_id"
-        const val EXTRA_MEDICINE_NAME = "medicine_name"
-        const val EXTRA_DOSAGE = "dosage"
-        const val EXTRA_SCHEDULE_TYPE = "schedule_type"
-        const val EXTRA_SCHEDULE_VALUE = "schedule_value"
-        const val EXTRA_DOSE_TIME = "dose_time"
+    private fun notificationId(
+        medicationId: Long,
+        scheduledAt: Long,
+        type: String
+    ): Int {
+        return "${medicationId}_${scheduledAt}_$type".hashCode()
     }
 }

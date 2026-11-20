@@ -17,7 +17,15 @@ data class MedicationDoseOutcomeEntity(
 
     val status: String,
 
-    val recordedAt: Long
+    val recordedAt: Long,
+
+    /**
+     * Stores the time when the user dismissed
+     * the missed dose from the Dashboard.
+     *
+     * The record remains available for History.
+     */
+    val dismissedAt: Long? = null
 )
 
 object DoseStatus {
