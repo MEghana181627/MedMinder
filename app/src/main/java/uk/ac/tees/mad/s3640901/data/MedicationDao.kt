@@ -2,6 +2,7 @@ package uk.ac.tees.mad.s3640901.data
 
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 
@@ -21,4 +22,30 @@ interface MedicationDao {
     suspend fun insertMedication(
         medication: MedicationEntity
     ): Long
+
+    @Query(
+        """
+        SELECT * FROM medication_dose_outcomes
+        ORDER BY scheduledAt DESC
+        """
+    )
+    fun observeDoseOutcomes(): Flow<List<MedicationDoseOutcomeEntity>>
+
+    @Query(
+        """
+        SELECT * FROM medication_dose_outcomes
+        WHERE medicationId = :medicationId
+        AND scheduledAt = :scheduledAt
+        LIMIT 1
+        """
+    )
+    suspend fun findDoseOutcome(
+        medicationId: Long,
+        scheduledAt: Long
+    ): MedicationDoseOutcomeEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveDoseOutcome(
+        outcome: MedicationDoseOutcomeEntity
+    )
 }

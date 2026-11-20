@@ -7,14 +7,11 @@ import androidx.room.PrimaryKey
 data class MedicationEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-
     val name: String,
     val dosage: String,
     val instructions: String,
     val scheduleType: String,
     val scheduleValue: String,
     val isActive: Boolean = true,
-
-    // Private local path of the captured medicine photo
     val photoPath: String? = null
 )

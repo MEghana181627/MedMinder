@@ -11,9 +11,8 @@ object MedicationScheduleCalculator {
         medication: MedicationEntity,
         afterMillis: Long = System.currentTimeMillis()
     ): Long? {
-        val timeMatch = Regex(
-            """(\d{1,2}):(\d{2})"""
-        ).find(medication.scheduleValue)
+        val timeMatch = Regex("(\\d{1,2}):(\\d{2})")
+            .find(medication.scheduleValue)
             ?: return null
 
         val hour = timeMatch.groupValues[1].toIntOrNull()
@@ -26,41 +25,45 @@ object MedicationScheduleCalculator {
             return null
         }
 
-        return when (
-            medication.scheduleType.lowercase(Locale.getDefault())
-        ) {
-            "daily" -> nextDaily(
-                hour,
-                minute,
-                afterMillis
-            )
+        return when (medication.scheduleType.lowercase(Locale.getDefault())) {
+            "daily" -> nextDaily(hour, minute, afterMillis)
 
             "weekly" -> nextWeekly(
-                medication.scheduleValue,
-                hour,
-                minute,
-                afterMillis
+                value = medication.scheduleValue,
+                hour = hour,
+                minute = minute,
+                afterMillis = afterMillis
             )
 
             "monthly" -> nextMonthly(
-                medication.scheduleValue,
-                hour,
-                minute,
-                afterMillis
+                value = medication.scheduleValue,
+                hour = hour,
+                minute = minute,
+                afterMillis = afterMillis
             )
 
             "one-time",
             "one time" -> nextOneTime(
-                medication.scheduleValue,
-                hour,
-                minute
+                value = medication.scheduleValue,
+                hour = hour,
+                minute = minute
             )
 
-            else -> nextDaily(
-                hour,
-                minute,
-                afterMillis
-            )
+            else -> null
+        }
+    }
+
+    private fun createBaseCalendar(
+        afterMillis: Long,
+        hour: Int,
+        minute: Int
+    ): Calendar {
+        return Calendar.getInstance().apply {
+            timeInMillis = afterMillis
+            set(Calendar.HOUR_OF_DAY, hour)
+            set(Calendar.MINUTE, minute)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
         }
     }
 
@@ -69,13 +72,11 @@ object MedicationScheduleCalculator {
         minute: Int,
         afterMillis: Long
     ): Long {
-        val calendar = Calendar.getInstance().apply {
-            timeInMillis = afterMillis
-            set(Calendar.HOUR_OF_DAY, hour)
-            set(Calendar.MINUTE, minute)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
+        val calendar = createBaseCalendar(
+            afterMillis = afterMillis,
+            hour = hour,
+            minute = minute
+        )
 
         if (calendar.timeInMillis <= afterMillis) {
             calendar.add(Calendar.DAY_OF_YEAR, 1)
@@ -91,13 +92,13 @@ object MedicationScheduleCalculator {
         afterMillis: Long
     ): Long? {
         val dayMap = mapOf(
-            "sunday" to Calendar.SUNDAY,
-            "monday" to Calendar.MONDAY,
-            "tuesday" to Calendar.TUESDAY,
-            "wednesday" to Calendar.WEDNESDAY,
-            "thursday" to Calendar.THURSDAY,
-            "friday" to Calendar.FRIDAY,
-            "saturday" to Calendar.SATURDAY
+            "sun" to Calendar.SUNDAY,
+            "mon" to Calendar.MONDAY,
+            "tue" to Calendar.TUESDAY,
+            "wed" to Calendar.WEDNESDAY,
+            "thu" to Calendar.THURSDAY,
+            "fri" to Calendar.FRIDAY,
+            "sat" to Calendar.SATURDAY
         )
 
         val selectedDays = dayMap
@@ -105,11 +106,7 @@ object MedicationScheduleCalculator {
                 value.contains(
                     dayName,
                     ignoreCase = true
-                ) ||
-                        value.contains(
-                            dayName.take(3),
-                            ignoreCase = true
-                        )
+                )
             }
             .values
             .toSet()
@@ -118,23 +115,18 @@ object MedicationScheduleCalculator {
             return null
         }
 
-        val baseCalendar = Calendar.getInstance().apply {
-            timeInMillis = afterMillis
-            set(Calendar.HOUR_OF_DAY, hour)
-            set(Calendar.MINUTE, minute)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-
         return (0..7)
             .mapNotNull { dayOffset ->
-                val candidate =
-                    baseCalendar.clone() as Calendar
-
-                candidate.add(
-                    Calendar.DAY_OF_YEAR,
-                    dayOffset
-                )
+                val candidate = createBaseCalendar(
+                    afterMillis = afterMillis,
+                    hour = hour,
+                    minute = minute
+                ).apply {
+                    add(
+                        Calendar.DAY_OF_YEAR,
+                        dayOffset
+                    )
+                }
 
                 if (
                     candidate.get(Calendar.DAY_OF_WEEK) in selectedDays &&
@@ -154,7 +146,7 @@ object MedicationScheduleCalculator {
         minute: Int,
         afterMillis: Long
     ): Long? {
-        val day = Regex("""\d{1,2}""")
+        val day = Regex("\\d{1,2}")
             .find(value.substringBefore("at"))
             ?.value
             ?.toIntOrNull()
@@ -164,33 +156,37 @@ object MedicationScheduleCalculator {
             return null
         }
 
-        return (0..2)
-            .map { monthOffset ->
-                Calendar.getInstance().apply {
+        return (0..12)
+            .mapNotNull { monthOffset ->
+                val candidate = Calendar.getInstance().apply {
                     timeInMillis = afterMillis
+
+                    // Set day to 1 before changing the month.
+                    // This prevents invalid dates such as January 31 + one month.
+                    set(Calendar.DAY_OF_MONTH, 1)
                     add(Calendar.MONTH, monthOffset)
 
-                    set(Calendar.DAY_OF_MONTH, 1)
                     set(Calendar.HOUR_OF_DAY, hour)
                     set(Calendar.MINUTE, minute)
                     set(Calendar.SECOND, 0)
                     set(Calendar.MILLISECOND, 0)
 
-                    val lastDay =
-                        getActualMaximum(
-                            Calendar.DAY_OF_MONTH
-                        )
+                    val lastDayOfMonth =
+                        getActualMaximum(Calendar.DAY_OF_MONTH)
 
                     set(
                         Calendar.DAY_OF_MONTH,
-                        day.coerceAtMost(lastDay)
+                        day.coerceAtMost(lastDayOfMonth)
                     )
                 }
+
+                if (candidate.timeInMillis > afterMillis) {
+                    candidate.timeInMillis
+                } else {
+                    null
+                }
             }
-            .firstOrNull {
-                it.timeInMillis > afterMillis
-            }
-            ?.timeInMillis
+            .minOrNull()
     }
 
     private fun nextOneTime(
