@@ -12,7 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MedicationEntity::class,
         MedicationDoseOutcomeEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class MedMinderDatabase : RoomDatabase() {
@@ -25,7 +25,9 @@ abstract class MedMinderDatabase : RoomDatabase() {
         private var instance: MedMinderDatabase? = null
 
         private val MIGRATION_1_2 = object : Migration(1, 2) {
-            override fun migrate(database: SupportSQLiteDatabase) {
+            override fun migrate(
+                database: SupportSQLiteDatabase
+            ) {
                 database.execSQL(
                     "ALTER TABLE medications ADD COLUMN photoPath TEXT"
                 )
@@ -33,7 +35,9 @@ abstract class MedMinderDatabase : RoomDatabase() {
         }
 
         private val MIGRATION_2_3 = object : Migration(2, 3) {
-            override fun migrate(database: SupportSQLiteDatabase) {
+            override fun migrate(
+                database: SupportSQLiteDatabase
+            ) {
                 database.execSQL(
                     """
                     CREATE TABLE IF NOT EXISTS medication_dose_outcomes (
@@ -49,7 +53,9 @@ abstract class MedMinderDatabase : RoomDatabase() {
         }
 
         private val MIGRATION_3_4 = object : Migration(3, 4) {
-            override fun migrate(database: SupportSQLiteDatabase) {
+            override fun migrate(
+                database: SupportSQLiteDatabase
+            ) {
                 database.execSQL(
                     """
                     ALTER TABLE medication_dose_outcomes
@@ -60,8 +66,9 @@ abstract class MedMinderDatabase : RoomDatabase() {
         }
 
         private val MIGRATION_4_5 = object : Migration(4, 5) {
-            override fun migrate(database: SupportSQLiteDatabase) {
-
+            override fun migrate(
+                database: SupportSQLiteDatabase
+            ) {
                 database.execSQL(
                     """
                     ALTER TABLE medications
@@ -70,14 +77,39 @@ abstract class MedMinderDatabase : RoomDatabase() {
                 )
 
                 // Existing medicines start from the migration time.
-                // Older schedule occurrences cannot become missed doses.
+                // Earlier doses cannot become missed doses.
                 database.execSQL(
-                    "UPDATE medications SET createdAt = ${System.currentTimeMillis()}"
+                    """
+                    UPDATE medications
+                    SET createdAt = ${System.currentTimeMillis()}
+                    """.trimIndent()
                 )
             }
         }
 
-        fun getInstance(context: Context): MedMinderDatabase {
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(
+                database: SupportSQLiteDatabase
+            ) {
+                database.execSQL(
+                    """
+                    ALTER TABLE medications
+                    ADD COLUMN genericName TEXT
+                    """.trimIndent()
+                )
+
+                database.execSQL(
+                    """
+                    ALTER TABLE medications
+                    ADD COLUMN brandName TEXT
+                    """.trimIndent()
+                )
+            }
+        }
+
+        fun getInstance(
+            context: Context
+        ): MedMinderDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
@@ -88,10 +120,13 @@ abstract class MedMinderDatabase : RoomDatabase() {
                         MIGRATION_1_2,
                         MIGRATION_2_3,
                         MIGRATION_3_4,
-                        MIGRATION_4_5
+                        MIGRATION_4_5,
+                        MIGRATION_5_6
                     )
                     .build()
-                    .also { instance = it }
+                    .also {
+                        instance = it
+                    }
             }
         }
     }
