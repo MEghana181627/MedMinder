@@ -1,9 +1,11 @@
 package uk.ac.tees.mad.s3640901.data
 
 import androidx.room.Dao
+import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -21,6 +23,22 @@ interface MedicationDao {
     @Query(
         """
         SELECT * FROM medications
+        ORDER BY name COLLATE NOCASE
+        """
+    )
+    fun observeAllMedications(): Flow<List<MedicationEntity>>
+
+    @Query(
+        "SELECT * FROM medications WHERE id = :medicationId LIMIT 1"
+    )
+
+    suspend fun getMedicationById(
+        medicationId: Long
+    ): MedicationEntity?
+
+    @Query(
+        """
+        SELECT * FROM medications
         WHERE isActive = 1
         ORDER BY name COLLATE NOCASE
         """
@@ -31,6 +49,27 @@ interface MedicationDao {
     suspend fun insertMedication(
         medication: MedicationEntity
     ): Long
+
+    @Update
+    suspend fun updateMedication(
+        medication: MedicationEntity
+    )
+
+    @Delete
+    suspend fun deleteMedication(
+        medication: MedicationEntity
+    )
+
+    @Query(
+        """
+        UPDATE medications
+        SET isActive = 0
+        WHERE id = :medicationId
+        """
+    )
+    suspend fun deactivateMedication(
+        medicationId: Long
+    )
 
     @Query(
         """
@@ -70,5 +109,15 @@ interface MedicationDao {
         medicationId: Long,
         scheduledAt: Long,
         dismissedAt: Long
+    )
+
+    @Query(
+        """
+        DELETE FROM medication_dose_outcomes
+        WHERE medicationId = :medicationId
+        """
+    )
+    suspend fun deleteDoseOutcomesForMedication(
+        medicationId: Long
     )
 }

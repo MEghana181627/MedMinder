@@ -15,23 +15,32 @@ object MedicationReminderScheduler {
     const val ACTION_MISSED_CHECK =
         "uk.ac.tees.mad.s3640901.action.MISSED_CHECK"
 
-    const val EXTRA_MEDICATION_ID = "extra_medication_id"
-    const val EXTRA_MEDICATION_NAME = "extra_medication_name"
-    const val EXTRA_SCHEDULED_AT = "extra_scheduled_at"
+    const val EXTRA_MEDICATION_ID =
+        "extra_medication_id"
 
-    private const val ONE_HOUR_MILLIS = 60L * 60L * 1000L
+    const val EXTRA_MEDICATION_NAME =
+        "extra_medication_name"
+
+    const val EXTRA_SCHEDULED_AT =
+        "extra_scheduled_at"
+
+    private const val ONE_HOUR_MILLIS =
+        60L * 60L * 1000L
 
     fun scheduleForMedication(
         context: Context,
         medication: MedicationEntity,
         afterMillis: Long = System.currentTimeMillis()
     ) {
-        if (!medication.isActive) return
+        if (!medication.isActive) {
+            return
+        }
 
-        val nextDose = MedicationScheduleCalculator.nextDoseTime(
-            medication = medication,
-            afterMillis = afterMillis
-        ) ?: return
+        val nextDose =
+            MedicationScheduleCalculator.nextDoseTime(
+                medication = medication,
+                afterMillis = afterMillis
+            ) ?: return
 
         scheduleDose(
             context = context,
@@ -67,29 +76,40 @@ object MedicationReminderScheduler {
             }
     }
 
-    fun cancelForMedication(
+    fun cancelAllForMedication(
         context: Context,
-        medication: MedicationEntity,
-        scheduledAt: Long
+        medication: MedicationEntity
     ) {
         val alarmManager =
-            context.getSystemService(AlarmManager::class.java)
-                ?: return
+            context.getSystemService(
+                AlarmManager::class.java
+            ) ?: return
 
         listOf(
             ACTION_DOSE_REMINDER,
             ACTION_MISSED_CHECK
         ).forEach { action ->
-
             alarmManager.cancel(
                 createPendingIntent(
                     context = context,
                     medication = medication,
-                    scheduledAt = scheduledAt,
+                    scheduledAt = 0L,
                     action = action
                 )
             )
         }
+    }
+
+    fun cancelForMedication(
+        context: Context,
+        medication: MedicationEntity,
+        @Suppress("UNUSED_PARAMETER")
+        scheduledAt: Long
+    ) {
+        cancelAllForMedication(
+            context = context,
+            medication = medication
+        )
     }
 
     private fun scheduleDose(
@@ -98,7 +118,8 @@ object MedicationReminderScheduler {
         scheduledAt: Long,
         nowMillis: Long
     ) {
-        val reminderTime = scheduledAt - ONE_HOUR_MILLIS
+        val reminderTime =
+            scheduledAt - ONE_HOUR_MILLIS
 
         if (reminderTime > nowMillis) {
             scheduleAlarm(
@@ -113,7 +134,8 @@ object MedicationReminderScheduler {
             )
         }
 
-        val missedCheckTime = scheduledAt + ONE_HOUR_MILLIS
+        val missedCheckTime =
+            scheduledAt + ONE_HOUR_MILLIS
 
         if (missedCheckTime > nowMillis) {
             scheduleAlarm(
@@ -135,8 +157,9 @@ object MedicationReminderScheduler {
         pendingIntent: PendingIntent
     ) {
         val alarmManager =
-            context.getSystemService(AlarmManager::class.java)
-                ?: return
+            context.getSystemService(
+                AlarmManager::class.java
+            ) ?: return
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             alarmManager.setAndAllowWhileIdle(
@@ -164,16 +187,27 @@ object MedicationReminderScheduler {
             MedicationReminderReceiver::class.java
         ).apply {
             this.action = action
-            putExtra(EXTRA_MEDICATION_ID, medication.id)
-            putExtra(EXTRA_MEDICATION_NAME, medication.name)
-            putExtra(EXTRA_SCHEDULED_AT, scheduledAt)
+
+            putExtra(
+                EXTRA_MEDICATION_ID,
+                medication.id
+            )
+
+            putExtra(
+                EXTRA_MEDICATION_NAME,
+                medication.name
+            )
+
+            putExtra(
+                EXTRA_SCHEDULED_AT,
+                scheduledAt
+            )
         }
 
         return PendingIntent.getBroadcast(
             context,
             requestCode(
                 medicationId = medication.id,
-                scheduledAt = scheduledAt,
                 action = action
             ),
             intent,
@@ -184,10 +218,9 @@ object MedicationReminderScheduler {
 
     private fun requestCode(
         medicationId: Long,
-        scheduledAt: Long,
         action: String
     ): Int {
-        return "${medicationId}_${scheduledAt}_$action"
+        return "${medicationId}_$action"
             .hashCode() and 0xFFFF
     }
 }
